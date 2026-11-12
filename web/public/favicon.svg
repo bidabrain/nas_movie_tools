@@ -1,1 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#4f46e5"/><rect x="14" y="18" width="36" height="28" rx="4" fill="none" stroke="#fff" stroke-width="4"/><path d="M28 26v12l10-6z" fill="#fff"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>NAS Movie Tools</title>
+  <!-- tile -->
+  <rect width="512" height="512" rx="116" fill="#4f46e5"/>
+  <!-- folder back with tab -->
+  <path d="M104 172a28 28 0 0 1 28-28h82a28 28 0 0 1 21 9.5l22 25.5h123a28 28 0 0 1 28 28v24H104z" fill="#a5b4fc"/>
+  <!-- folder front -->
+  <rect x="104" y="204" width="304" height="188" rx="28" fill="#ffffff"/>
+  <!-- film perforations -->
+  <g fill="#e0e7ff">
+    <rect x="132" y="224" width="28" height="18" rx="5"/>
+    <rect x="132" y="354" width="28" height="18" rx="5"/>
+    <rect x="352" y="224" width="28" height="18" rx="5"/>
+  </g>
+  <!-- play -->
+  <path d="M234 252.5v87a10 10 0 0 0 15.2 8.5l70-43.5a10 10 0 0 0 0-17l-70-43.5a10 10 0 0 0-15.2 8.5z" fill="#4f46e5"/>
+  <!-- organized badge -->
+  <circle cx="396" cy="384" r="62" fill="#10b981" stroke="#4f46e5" stroke-width="16"/>
+  <path d="M368 385l19 19 38-40" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

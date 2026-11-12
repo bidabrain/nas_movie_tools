@@ -1,4 +1,8 @@
-# NAS Movie Tools
+<p align="center">
+  <img src="icon.svg" alt="NAS Movie Tools" width="128" height="128" />
+</p>
+
+<h1 align="center">NAS Movie Tools</h1>
 
 一个精简、现代化的 NAS 影视整理工具：**监控下载目录 → 通过 TMDB 识别影片 → 按分类整理进 Jellyfin 媒体库（附带 NFO 和海报）→ 通知 Jellyfin 扫描 → 推送 Telegram / Gotify 通知**。
 
