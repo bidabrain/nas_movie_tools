@@ -1,0 +1,22 @@
+{
+  "name": "nas-movie-tools",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Watch folders, identify media with TMDB, organize into a Jellyfin library and notify via Telegram / Gotify.",
+  "license": "AGPL-3.0-only",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w web && npm run build -w server",
+    "start": "npm run start -w server",
+    "test": "npm test -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

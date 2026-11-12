@@ -1,0 +1,20 @@
+services:
+  nas-movie-tools:
+    image: ghcr.io/bidabrain/nas_movie_tools:latest
+    # build: .   # or build locally from this repository
+    container_name: nas-movie-tools
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
+      # Optional: create the admin account on first start instead of in the browser
+      # - ADMIN_USER=admin
+      # - ADMIN_PASSWORD=change-me
+    volumes:
+      - ./config:/config
+      # Mount the PARENT folder that contains both downloads and the media library,
+      # so hardlinks work (they need to be on the same filesystem and mount).
+      - /volume1/data:/data
