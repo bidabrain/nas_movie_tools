@@ -53,18 +53,20 @@ export async function refreshLibrary(id?: string) {
 }
 
 /** Tell Jellyfin that files were added so it scans only those paths. */
-export async function notifyPaths(paths: string[]) {
-  if (!paths.length) return;
+export type UpdateType = 'Created' | 'Modified' | 'Deleted';
+
+export async function notifyPaths(updates: { path: string; type: UpdateType }[]) {
+  if (!updates.length) return;
   const { url, headers } = conf();
   await request(`${url}/Library/Media/Updated`, {
     method: 'POST',
     headers,
-    json: { Updates: paths.map((p) => ({ Path: p, UpdateType: 'Created' })) },
+    json: { Updates: updates.map((u) => ({ Path: u.path, UpdateType: u.type })) },
   });
 }
 
 // Debounced path notifications: many episodes arriving together cause one call.
-const pending = new Set<string>();
+const pending = new Map<string, UpdateType>();
 let timer: NodeJS.Timeout | undefined;
 
 export function mapPath(local: string): string {
@@ -78,16 +80,16 @@ export function mapPath(local: string): string {
   return local;
 }
 
-export function queueRefresh(dir: string) {
+export function queueRefresh(dir: string, type: UpdateType = 'Created') {
   if (!getSettings().jellyfin.refreshAfterOrganize || !jellyfinConfigured()) return;
-  pending.add(mapPath(dir));
+  pending.set(mapPath(dir), type);
   clearTimeout(timer);
   timer = setTimeout(async () => {
-    const paths = [...pending];
+    const updates = [...pending].map(([path, type]) => ({ path, type }));
     pending.clear();
     try {
-      await notifyPaths(paths);
-      log.info(`已通知 Jellyfin 扫描 ${paths.length} 个目录`);
+      await notifyPaths(updates);
+      log.info(`已通知 Jellyfin 扫描 ${updates.length} 个目录`);
     } catch (e) {
       log.warn('通知 Jellyfin 扫描失败，改为刷新整个媒体库', e);
       try {
@@ -97,4 +99,5 @@ export function queueRefresh(dir: string) {
       }
     }
   }, 15000);
+  timer.unref();
 }

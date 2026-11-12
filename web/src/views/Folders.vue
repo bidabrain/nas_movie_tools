@@ -39,7 +39,7 @@ async function persist(list: WatchFolder[]) {
 
 function add() {
   isNew.value = true;
-  editing.value = { id: '', name: '', source: '', target: '', enabled: true, usePolling: false, mediaType: 'auto', mode: '' };
+  editing.value = { id: '', name: '', source: '', target: '', enabled: true, usePolling: false, mediaType: 'auto', mode: '', onlyNew: false };
 }
 function edit(f: WatchFolder) {
   isNew.value = false;
@@ -123,6 +123,7 @@ async function scan(f: WatchFolder) {
           <span class="badge">{{ typeLabel[f.mediaType] }}</span>
           <span class="badge">{{ modeLabel[f.mode || globalMode] }}{{ f.mode ? '' : '（默认）' }}</span>
           <span v-if="f.usePolling" class="badge info">轮询模式</span>
+          <span v-if="f.onlyNew" class="badge accent" :title="f.since ? `忽略 ${new Date(f.since).toLocaleString('zh-CN')} 之前已存在的文件` : ''">只处理新文件</span>
           <span v-if="f.enabled && !f.active" class="badge danger">目录不可访问</span>
         </div>
         <div class="row foot">
@@ -181,6 +182,12 @@ async function scan(f: WatchFolder) {
             </select>
           </div>
         </div>
+        <Toggle
+          :model-value="!!editing.onlyNew"
+          @update:model-value="editing.onlyNew = $event"
+          label="只处理新文件"
+          :hint="editing.onlyNew && editing.since ? `忽略 ${new Date(editing.since).toLocaleString('zh-CN')} 之前已存在的文件，只整理之后新出现的文件` : '开启后，保存时目录里已有的文件都会被忽略，只整理之后新下载或新放入的文件'"
+        />
         <Toggle v-model="editing.usePolling" label="轮询模式" hint="目录位于 SMB/NFS 网络共享，或文件变化无法被实时检测时开启" />
         <Toggle v-model="editing.enabled" label="启用监控" />
       </div>

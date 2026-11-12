@@ -183,6 +183,9 @@ const pages = () => Math.max(1, Math.ceil(data.value.total / data.value.pageSize
 
     <Modal v-if="fixing" title="手动识别" width="720px" @close="fixing = null">
       <div class="mono small muted break" style="margin-bottom: 12px">{{ fixing.src_path }}</div>
+      <div v-if="fixing.dest_path && fixing.status === 'success'" class="note small">
+        按新条目整理成功后，之前整理到 <span class="mono break">{{ shortPath(fixing.dest_path) }}</span> 的文件及其 NFO、截图、字幕会被删除，变空的影片目录也会一并清理。下载目录里的源文件不受影响。
+      </div>
       <form class="row" @submit.prevent="doSearch">
         <select v-model="fkind" class="input" style="width: 110px">
           <option value="">全部</option>
@@ -329,6 +332,13 @@ const pages = () => Math.max(1, Math.ceil(data.value.total / data.value.pageSize
   align-items: center;
   gap: 12px;
   margin-top: 16px;
+}
+.note {
+  background: var(--info-soft);
+  color: var(--text-2);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
 }
 .results {
   margin-top: 14px;

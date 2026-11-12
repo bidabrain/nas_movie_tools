@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { request } from './http.js';
-import { getBySrc, upsertHistory, type HistoryRow } from './history.js';
+import { getBySrc, otherOwnersOfDest, upsertHistory, type HistoryRow } from './history.js';
+import { removeOrganizedOutput } from './media/cleanup.js';
 import { queueRefresh } from './integrations/jellyfin.js';
 import { notify, notifyGrouped } from './integrations/notify.js';
 import { log } from './logger.js';
@@ -10,7 +11,7 @@ import { render } from './media/naming.js';
 import { episodeNfo, movieNfo, tvshowNfo } from './media/nfo.js';
 import { parseName, parsePath, SUBTITLE_EXTS, VIDEO_EXTS, type ParsedName } from './media/parser.js';
 import * as tmdb from './media/tmdb.js';
-import { transfer, writeIfMissing } from './media/transfer.js';
+import { sameFile, transfer, writeIfMissing } from './media/transfer.js';
 import { getSettings, type WatchFolder } from './settings.js';
 
 
@@ -88,12 +89,71 @@ async function siblingSubtitles(video: string): Promise<{ file: string; suffix: 
 
 export class OrganizeError extends Error {}
 
+/**
+ * Is the file recorded at `prior.dest_path` really the output made from
+ * `input`? Only then may it be deleted when re-identifying.
+ */
+async function ownsOldOutput(prior: HistoryRow, input: string): Promise<boolean> {
+  if (!prior.dest_path) return false;
+  if (otherOwnersOfDest(prior.dest_path, prior.src_path) > 0) return false;
+  if (await sameFile(input, prior.dest_path)) return true; // hardlink / symlink
+  if (prior.status === 'skipped') return false; // dest belonged to another file
+  const [a, b] = await Promise.all([fs.stat(input).catch(() => undefined), fs.stat(prior.dest_path).catch(() => undefined)]);
+  return !!a && !!b && a.size === b.size; // copy mode
+}
+
+async function cleanupOld(prior: HistoryRow, folder: WatchFolder, removeVideo: boolean) {
+  const o = getSettings().organize;
+  const kindDir = prior.media_type === 'tv' ? o.tvDir : o.movieDir;
+  const removed = await removeOrganizedOutput(prior.dest_path!, {
+    guardRoot: folder.target,
+    pruneRoot: path.join(folder.target, kindDir, prior.category ?? ''),
+    removeVideo,
+  });
+  const n = removed.files.length + removed.dirs.length;
+  if (!n) return;
+  log.info(`已清理旧的整理结果 ${prior.dest_path}（删除 ${removed.files.length} 个文件、${removed.dirs.length} 个空目录）`);
+  // tell Jellyfin about the highest folder that disappeared (or the file itself)
+  const gone = removed.dirs.length ? removed.dirs[removed.dirs.length - 1] : prior.dest_path!;
+  queueRefresh(gone, 'Deleted');
+}
+
 /** Organize one video file. Always records the result in history. */
 export async function organizeFile(src: string, folder: WatchFolder, override: Override = {}): Promise<HistoryRow> {
   const s = getSettings();
   const o = s.organize;
-  const stat = await fs.stat(src);
-  const base: Parameters<typeof upsertHistory>[0] = { src_path: src, folder_id: folder.id, status: 'pending', size: stat.size };
+  const prior = getBySrc(src);
+
+  // In move mode the source is gone after the first run; re-identifying then
+  // relocates the file that already sits in the library.
+  let input = src;
+  let stat = await fs.stat(src).catch(() => undefined);
+  if (!stat && prior?.dest_path) {
+    const st = await fs.stat(prior.dest_path).catch(() => undefined);
+    if (st) {
+      input = prior.dest_path;
+      stat = st;
+    }
+  }
+  // Keep what is currently in the library on the record until it is replaced,
+  // so a failed re-identify can still clean it up on the next attempt.
+  const keep: Partial<HistoryRow> = prior
+    ? {
+        dest_path: prior.dest_path,
+        media_type: prior.media_type,
+        tmdb_id: prior.tmdb_id,
+        title: prior.title,
+        year: prior.year,
+        season: prior.season,
+        episode: prior.episode,
+        category: prior.category,
+        poster: prior.poster,
+      }
+    : {};
+  if (!stat) {
+    return upsertHistory({ ...keep, src_path: src, folder_id: folder.id, status: 'failed', message: '源文件已不存在' });
+  }
+  const base: Parameters<typeof upsertHistory>[0] = { ...keep, src_path: src, folder_id: folder.id, status: 'pending', size: stat.size };
   upsertHistory(base);
 
   try {
@@ -144,11 +204,14 @@ export async function organizeFile(src: string, folder: WatchFolder, override: O
     const dest = path.join(root, rel + ext);
     const destDir = path.dirname(dest);
     const destBase = path.join(destDir, path.basename(dest, ext));
-    const mode = folder.mode || o.mode;
+    const relocating = input !== src;
+    const mode = relocating ? 'move' : folder.mode || o.mode;
 
     // ---- transfer video + subtitles
-    const subs = await siblingSubtitles(src);
-    const moved = await transfer(src, dest, mode, o.overwrite);
+    const subs = await siblingSubtitles(input);
+    const result = await transfer(input, dest, mode, o.overwrite);
+    const placed = result !== 'exists';
+    const moved = result === 'done';
     if (moved) {
       for (const sub of subs) {
         try {
@@ -159,16 +222,29 @@ export async function organizeFile(src: string, folder: WatchFolder, override: O
       }
     }
 
+    // ---- remove the output of an earlier (wrong) identification
+    if (prior?.dest_path && path.resolve(prior.dest_path) !== path.resolve(dest)) {
+      if (relocating) {
+        // the video itself was moved; drop its old NFO/thumb and empty folders
+        if (moved) await cleanupOld(prior, folder, false);
+        else log.warn(`新位置已有文件，保留原位置的文件 ${prior.dest_path}`);
+      } else if (await ownsOldOutput(prior, input)) {
+        await cleanupOld(prior, folder, true);
+      } else {
+        log.warn(`旧的整理结果无法确认属于此文件，未删除：${prior.dest_path}`);
+      }
+    }
+
     // ---- metadata
     const segs = rel.split('/');
     const topDir = segs.length > 1 ? path.join(root, segs[0]) : destDir;
     if (o.writeNfo) {
       if (kind === 'movie') {
-        await writeIfMissing(`${destBase}.nfo`, movieNfo(info), moved);
+        await writeIfMissing(`${destBase}.nfo`, movieNfo(info), placed);
       } else {
         await writeIfMissing(path.join(topDir, 'tvshow.nfo'), tvshowNfo(info));
         const ep = await tmdb.episode(info.id, season!, episode!);
-        await writeIfMissing(`${destBase}.nfo`, episodeNfo(info, season!, episode!, ep), moved);
+        await writeIfMissing(`${destBase}.nfo`, episodeNfo(info, season!, episode!, ep), placed);
         if (o.downloadArtwork && ep?.stillPath) await download(tmdb.imageUrl(ep.stillPath, 'w780'), `${destBase}-thumb.jpg`);
       }
     }
@@ -183,7 +259,8 @@ export async function organizeFile(src: string, folder: WatchFolder, override: O
 
     const row = upsertHistory({
       ...base,
-      status: moved ? 'success' : 'skipped',
+      status: placed ? 'success' : 'skipped',
+      size: stat.size,
       dest_path: dest,
       media_type: kind,
       tmdb_id: info.id,
@@ -193,10 +270,12 @@ export async function organizeFile(src: string, folder: WatchFolder, override: O
       episode: episode ?? null,
       category: category ?? null,
       poster: tmdb.imageUrl(info.posterPath, 'w342') ?? null,
-      message: moved ? null : '目标文件已存在，按覆盖策略跳过',
+      message: placed ? null : '目标文件已存在，按覆盖策略跳过',
     });
 
-    if (moved) {
+    if (result === 'same') {
+      log.info(`已在媒体库中 ${path.basename(src)} → ${dest}`);
+    } else if (moved) {
       log.info(`整理完成 ${path.basename(src)} → ${dest}`);
       queueRefresh(topDir);
       if (s.notify.onSuccess) {
@@ -224,7 +303,7 @@ export async function organizeFile(src: string, folder: WatchFolder, override: O
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     log.error(`整理失败 ${path.basename(src)}`, e);
-    const row = upsertHistory({ ...base, status: 'failed', message });
+    const row = upsertHistory({ ...base, src_path: src, status: 'failed', message });
     if (getSettings().notify.onFailure) {
       void notify({ title: '⚠️ 整理失败', body: `${path.basename(src)}\n${message}` });
     }

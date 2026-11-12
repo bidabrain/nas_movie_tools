@@ -55,6 +55,15 @@ export function getBySrc(src: string): HistoryRow | undefined {
   return db.prepare('SELECT * FROM history WHERE src_path = ?').get(src) as HistoryRow | undefined;
 }
 
+/** Other records that claim the same organized file (so it must not be deleted). */
+export function otherOwnersOfDest(dest: string, src: string): number {
+  return (
+    db.prepare("SELECT COUNT(*) AS n FROM history WHERE dest_path = ? AND src_path <> ? AND status = 'success'").get(dest, src) as {
+      n: number;
+    }
+  ).n;
+}
+
 export function getHistory(id: number): HistoryRow | undefined {
   return db.prepare('SELECT * FROM history WHERE id = ?').get(id) as HistoryRow | undefined;
 }

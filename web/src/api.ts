@@ -68,6 +68,8 @@ export interface WatchFolder {
   usePolling: boolean;
   mediaType: 'auto' | 'movie' | 'tv';
   mode?: TransferMode | '';
+  onlyNew?: boolean;
+  since?: string;
   active?: boolean;
 }
 

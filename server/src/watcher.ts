@@ -37,7 +37,10 @@ async function pump() {
   running = job.file;
   try {
     const stat = await fs.stat(job.file).catch(() => undefined);
-    if (!stat) {
+    if (!stat && job.force) {
+      // manual re-identify in move mode: organizeFile picks up the library copy
+      await organizeFile(job.file, job.folder, job.override);
+    } else if (!stat) {
       log.debug(`文件已不存在，跳过 ${job.file}`);
     } else if (!job.force && stat.size < getSettings().organize.minFileSizeMB * 1024 * 1024) {
       log.debug(`文件过小，跳过 ${job.file}`);
@@ -58,8 +61,22 @@ function insideTarget(file: string, folder: WatchFolder) {
   return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-function consider(file: string, folder: WatchFolder) {
+/**
+ * With "only new files" on, a file counts as new when it was written or
+ * moved into place after the baseline. ctime changes on rename/move, so a
+ * file moved in from elsewhere still counts even if its mtime is old.
+ */
+export function arrivedAfterBaseline(st: { mtimeMs: number; ctimeMs: number }, folder: WatchFolder): boolean {
+  if (!folder.onlyNew || !folder.since) return true;
+  return Math.max(st.mtimeMs, st.ctimeMs) >= Date.parse(folder.since);
+}
+
+async function consider(file: string, folder: WatchFolder) {
   if (!isVideo(file) || isIgnored(file) || insideTarget(file, folder)) return;
+  if (folder.onlyNew) {
+    const st = await fs.stat(file).catch(() => undefined);
+    if (!st || !arrivedAfterBaseline(st, folder)) return;
+  }
   enqueue({ file, folder });
 }
 
@@ -90,6 +107,7 @@ export async function scanFolder(folder: WatchFolder): Promise<number> {
     if (isIgnored(f) || insideTarget(f, folder)) continue;
     const st = await fs.stat(f).catch(() => undefined);
     if (!st || Date.now() - st.mtimeMs < stableMs) continue; // still being written
+    if (!arrivedAfterBaseline(st, folder)) continue; // existed before "only new files" was enabled
     if (needsProcessing(f, st.size) && enqueue({ file: f, folder })) n++;
   }
   if (n) log.info(`扫描「${folder.name || folder.source}」发现 ${n} 个待整理文件`);
@@ -129,15 +147,15 @@ export async function startWatchers() {
       awaitWriteFinish: { stabilityThreshold: Math.max(2, s.organize.stableSeconds) * 1000, pollInterval: 1000 },
       ignored: (p: string) => isIgnored(p) || insideTarget(p, folder),
     });
-    w.on('add', (file) => consider(file, folder));
-    w.on('change', (file) => consider(file, folder));
+    w.on('add', (file) => void consider(file, folder));
+    w.on('change', (file) => void consider(file, folder));
     w.on('error', (e) => log.error(`监控出错 ${folder.source}`, e));
     watchers.set(folder.id, w);
     log.info(`开始监控 ${folder.source}${folder.usePolling ? '（轮询模式）' : ''}`);
   }
   clearInterval(scanTimer);
   const minutes = s.organize.scanIntervalMinutes;
-  if (minutes > 0) scanTimer = setInterval(() => void scanAll(), minutes * 60000);
+  if (minutes > 0) scanTimer = setInterval(() => void scanAll(), minutes * 60000).unref();
   void scanAll();
 }
 

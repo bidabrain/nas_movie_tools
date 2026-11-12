@@ -11,23 +11,42 @@ async function exists(p: string) {
   }
 }
 
+/** True when `a` and `b` are the same file (same path, same inode, or b is a symlink to a). */
+export async function sameFile(a: string, b: string): Promise<boolean> {
+  if (path.resolve(a) === path.resolve(b)) return true;
+  try {
+    const lb = await fs.lstat(b);
+    if (lb.isSymbolicLink()) {
+      const target = path.resolve(path.dirname(b), await fs.readlink(b));
+      return target === path.resolve(a);
+    }
+    const [sa, sb] = await Promise.all([fs.stat(a), fs.stat(b)]);
+    return sa.ino !== 0 && sa.ino === sb.ino && sa.dev === sb.dev;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Put `src` at `dest` using the given mode. Returns false when the destination
- * exists and the overwrite policy says to keep it.
+ * - `done`: the file was placed at dest
+ * - `same`: dest already is this very file (hardlink/symlink/same path)
+ * - `exists`: a different file is at dest and the overwrite policy kept it
  */
+export type TransferResult = 'done' | 'same' | 'exists';
+
 export async function transfer(
   src: string,
   dest: string,
   mode: TransferMode,
   overwrite: 'never' | 'larger' | 'always',
-): Promise<boolean> {
+): Promise<TransferResult> {
   await fs.mkdir(path.dirname(dest), { recursive: true });
   if (await exists(dest)) {
-    if (path.resolve(src) === path.resolve(dest)) return false;
-    if (overwrite === 'never') return false;
+    if (await sameFile(src, dest)) return 'same';
+    if (overwrite === 'never') return 'exists';
     if (overwrite === 'larger') {
       const [a, b] = await Promise.all([fs.stat(src), fs.stat(dest).catch(() => undefined)]);
-      if (b && a.size <= b.size) return false;
+      if (b && a.size <= b.size) return 'exists';
     }
     await fs.rm(dest, { force: true });
   }
@@ -59,7 +78,7 @@ export async function transfer(
       }
       break;
   }
-  return true;
+  return 'done';
 }
 
 export async function writeIfMissing(file: string, content: string | Buffer, force = false) {

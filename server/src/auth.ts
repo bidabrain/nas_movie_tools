@@ -37,12 +37,46 @@ export function setAdmin(username: string, password: string) {
   kvSet('admin', { username: username.trim(), salt, hash: hashPassword(password, salt) } satisfies Admin);
 }
 
+const DUMMY = { salt: randomBytes(16).toString('hex'), hash: randomBytes(64).toString('hex') };
+
+/** Constant-time-ish: always runs scrypt so an unknown username is not faster. */
 export function verify(username: string, password: string) {
   const a = kvGet<Admin>('admin');
-  if (!a || a.username !== username) return false;
-  const h = Buffer.from(hashPassword(password, a.salt), 'hex');
-  const expected = Buffer.from(a.hash, 'hex');
-  return h.length === expected.length && timingSafeEqual(h, expected);
+  const ref = a ?? { username: '', ...DUMMY };
+  const h = Buffer.from(hashPassword(password, ref.salt), 'hex');
+  const expected = Buffer.from(ref.hash, 'hex');
+  const passOk = h.length === expected.length && timingSafeEqual(h, expected);
+  return !!a && a.username === username && passOk;
+}
+
+// ------------------------------------------------------------ first-run setup
+
+let setupCode: string | undefined;
+
+/**
+ * One-time code required to create the first admin. Printed to the logs on
+ * start, so someone who merely reaches the web page cannot claim the instance.
+ */
+export function ensureSetupCode(): string | undefined {
+  if (hasAdmin()) {
+    setupCode = undefined;
+    return undefined;
+  }
+  // unambiguous base32-ish alphabet, 8 chars ≈ 40 bits
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  setupCode ??= Array.from(randomBytes(8), (b) => alphabet[b % alphabet.length]).join('');
+  return setupCode;
+}
+
+export function checkSetupCode(code: string | undefined) {
+  if (!setupCode || !code) return false;
+  const a = Buffer.from(code.trim().toUpperCase());
+  const b = Buffer.from(setupCode);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export function clearSetupCode() {
+  setupCode = undefined;
 }
 
 export function issueToken(username: string) {

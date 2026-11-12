@@ -28,6 +28,10 @@ export interface WatchFolder {
   mediaType: 'auto' | MediaKind;
   /** Override the global transfer mode for this folder. */
   mode?: TransferMode | '';
+  /** Ignore files that already existed when the folder was added / the option was turned on. */
+  onlyNew?: boolean;
+  /** ISO time the "only new" baseline was taken. Managed by the server. */
+  since?: string;
 }
 
 export interface Settings {
@@ -141,9 +145,27 @@ export function getSettings(): Settings {
   return cache;
 }
 
+/**
+ * Keep the "only new files" baseline server-side: taken when a folder is added
+ * with the option on or when it is switched on, kept while it stays on (and
+ * while the source folder is unchanged), cleared when switched off.
+ */
+export function normalizeFolders(prev: WatchFolder[], next: WatchFolder[], now = new Date()): WatchFolder[] {
+  return next.map((f) => {
+    const id = f.id || randomUUID();
+    const old = prev.find((p) => p.id === id);
+    const out: WatchFolder = { ...f, id, onlyNew: !!f.onlyNew };
+    if (!out.onlyNew) delete out.since;
+    else if (old?.onlyNew && old.since && old.source === f.source) out.since = old.since;
+    else out.since = now.toISOString();
+    return out;
+  });
+}
+
 export function saveSettings(patch: Partial<Settings>): Settings {
+  const prevFolders = getSettings().watchFolders;
   const next = merge(getSettings(), patch);
-  next.watchFolders = next.watchFolders.map((f) => ({ ...f, id: f.id || randomUUID() }));
+  next.watchFolders = normalizeFolders(prevFolders, next.watchFolders);
   kvSet('settings', next);
   cache = next;
   for (const l of listeners) {

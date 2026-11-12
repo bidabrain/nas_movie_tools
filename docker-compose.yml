@@ -18,3 +18,4 @@ services:
       # Mount the PARENT folder that contains both downloads and the media library,
       # so hardlinks work (they need to be on the same filesystem and mount).
       - /volume1/data:/data
+    mem_limit: 512m

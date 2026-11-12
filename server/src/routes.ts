@@ -13,6 +13,7 @@ import { parseWithFolders } from './organizer.js';
 import { getSettings, publicSettings, saveSettings, stripMasked, type Settings } from './settings.js';
 import { enqueue, queueState, scanAll, scanFolder, watcherStatus } from './watcher.js';
 import { version } from './version.js';
+import { clientKey, FailureLimiter } from './ratelimit.js';
 
 const PUBLIC_ROUTES = new Set(['/api/auth/state', '/api/auth/login', '/api/auth/setup', '/api/health']);
 
@@ -51,24 +52,43 @@ export async function registerRoutes(app: FastifyInstance) {
     return { setupRequired: !auth.hasAdmin(), authenticated: !!user, username: user ?? null, version };
   });
 
-  app.post<{ Body: { username: string; password: string } }>('/api/auth/setup', async (req, reply) => {
+  // Login and setup share one limiter: 5 failures per client or 20 overall
+  // within 15 minutes lock further attempts.
+  const limiter = new FailureLimiter({ perClient: 5, global: 20, windowMs: 15 * 60000, lockMs: 15 * 60000 });
+  const tooMany = (reply: FastifyReply, ms: number) =>
+    reply
+      .code(429)
+      .header('Retry-After', Math.ceil(ms / 1000))
+      .send({ error: `尝试次数过多，请 ${Math.ceil(ms / 60000)} 分钟后再试` });
+
+  app.post<{ Body: { username: string; password: string; code?: string } }>('/api/auth/setup', async (req, reply) => {
     if (auth.hasAdmin()) return reply.code(409).send({ error: '管理员已存在' });
+    const key = clientKey(req);
+    const wait = limiter.blockedFor(key);
+    if (wait) return tooMany(reply, wait);
+    if (!auth.checkSetupCode(req.body?.code)) {
+      limiter.fail(key);
+      log.warn(`初始化验证码错误：${key}`);
+      return reply.code(403).send({ error: '初始化验证码不正确，请在容器日志中查看' });
+    }
     auth.setAdmin(req.body.username, req.body.password);
+    auth.clearSetupCode();
+    limiter.succeed(key);
     setSession(reply, req.body.username.trim(), isHttps(req));
+    log.info(`已创建管理员 ${req.body.username.trim()}`);
     return { ok: true };
   });
 
-  const attempts = new Map<string, { n: number; until: number }>();
   app.post<{ Body: { username: string; password: string } }>('/api/auth/login', async (req, reply) => {
-    const a = attempts.get(req.ip);
-    if (a && a.until > Date.now()) return reply.code(429).send({ error: '尝试次数过多，请稍后再试' });
-    if (!auth.verify(req.body.username ?? '', req.body.password ?? '')) {
-      const n = (a?.n ?? 0) + 1;
-      attempts.set(req.ip, { n, until: n >= 5 ? Date.now() + 5 * 60000 : 0 });
-      log.warn(`登录失败：${req.ip}`);
+    const key = clientKey(req);
+    const wait = limiter.blockedFor(key);
+    if (wait) return tooMany(reply, wait);
+    if (!auth.verify(req.body?.username ?? '', req.body?.password ?? '')) {
+      limiter.fail(key);
+      log.warn(`登录失败：${key}`);
       return reply.code(401).send({ error: '用户名或密码错误' });
     }
-    attempts.delete(req.ip);
+    limiter.succeed(key);
     setSession(reply, req.body.username, isHttps(req));
     return { ok: true };
   });
@@ -80,7 +100,13 @@ export async function registerRoutes(app: FastifyInstance) {
 
   app.post<{ Body: { current: string; username?: string; password: string } }>('/api/auth/password', async (req, reply) => {
     const name = auth.getAdminName()!;
-    if (!auth.verify(name, req.body.current ?? '')) return reply.code(400).send({ error: '当前密码不正确' });
+    const key = clientKey(req);
+    const wait = limiter.blockedFor(key);
+    if (wait) return tooMany(reply, wait);
+    if (!auth.verify(name, req.body.current ?? '')) {
+      limiter.fail(key);
+      return reply.code(400).send({ error: '当前密码不正确' });
+    }
     const nextName = req.body.username?.trim() || name;
     auth.setAdmin(nextName, req.body.password);
     auth.rotateSecret();
@@ -128,10 +154,9 @@ export async function registerRoutes(app: FastifyInstance) {
       if (!row) return reply.code(404).send({ error: '记录不存在' });
       const folder = getSettings().watchFolders.find((f) => f.id === row.folder_id);
       if (!folder) return reply.code(400).send({ error: '对应的监控目录已被删除' });
-      try {
-        await fs.access(row.src_path);
-      } catch {
-        return reply.code(400).send({ error: '源文件已不存在' });
+      const available = async (p: string | null) => !!p && (await fs.access(p).then(() => true, () => false));
+      if (!(await available(row.src_path)) && !(await available(row.dest_path))) {
+        return reply.code(400).send({ error: '源文件和媒体库中的文件都已不存在' });
       }
       const b = req.body ?? {};
       enqueue({

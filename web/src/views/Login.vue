@@ -9,6 +9,7 @@ const route = useRoute();
 const username = ref('admin');
 const password = ref('');
 const confirm = ref('');
+const code = ref('');
 const error = ref('');
 const busy = ref(false);
 const setup = computed(() => session.setupRequired);
@@ -21,7 +22,7 @@ async function submit() {
   }
   busy.value = true;
   try {
-    await api(setup.value ? '/auth/setup' : '/auth/login', { body: { username: username.value, password: password.value } });
+    await api(setup.value ? '/auth/setup' : '/auth/login', { body: { username: username.value, password: password.value, code: code.value } });
     await loadSession();
     router.replace((route.query.next as string) || '/');
   } catch (e) {
@@ -38,6 +39,11 @@ async function submit() {
       <div class="logo"><Clapperboard :size="22" /></div>
       <h1>{{ setup ? '创建管理员账号' : '登录' }}</h1>
       <p class="muted">{{ setup ? '首次使用，请设置用于登录管理界面的账号。' : 'NAS Movie Tools · 媒体自动整理' }}</p>
+      <div v-if="setup" class="field">
+        <label for="k">初始化验证码</label>
+        <input id="k" v-model="code" class="input mono" autocomplete="off" spellcheck="false" required placeholder="8 位验证码" />
+        <span class="hint">在容器日志中查看（docker logs nas-movie-tools），每次重启会重新生成</span>
+      </div>
       <div class="field">
         <label for="u">用户名</label>
         <input id="u" v-model="username" class="input" autocomplete="username" required />

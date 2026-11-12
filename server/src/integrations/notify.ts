@@ -107,5 +107,6 @@ export function notifyGrouped(key: string, msg: NotifyMessage, line: string, win
       void notify({ title: entry.title, body, image: entry.image, link: entry.link });
     }, windowMs),
   };
+  entry.timer.unref();
   groups.set(key, entry);
 }
